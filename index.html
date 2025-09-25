@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>EMG + ROM Dashboard</title>
+<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+<style>
+body { font-family: Arial; margin:0; padding:0; background:#e0f7ff; color:#003366; }
+header { background:#0099cc; color:white; padding:20px; text-align:center; box-shadow:0 4px 6px rgba(0,0,0,0.1); }
+main { padding:20px; max-width:1200px; margin:auto; }
+.section { background:#fff; padding:20px; border-radius:12px; margin-bottom:20px; box-shadow:0 4px 6px rgba(0,0,0,0.05);}
+h2 { color:#006699; }
+.controls { display:flex; flex-wrap:wrap; gap:20px; align-items:flex-end; }
+label { font-weight:bold; display:block; margin-bottom:5px; }
+input[type=number], input[type=range] { padding:5px; }
+.toggle { margin-right:10px; }
+.dropzone { position: relative; border:2px dashed #0099cc; border-radius:12px; padding:30px; text-align:center; color:#006699; font-weight:bold; cursor:pointer; transition:background-color 0.2s;}
+.dropzone.hover { background-color:#ccf0ff; }
+#summary, #peaks, #bursts { margin-top:10px; }
+#graph { width:100%; height:500px; margin-top:20px; }
+button { background:#0099cc; color:white; border:none; padding:8px 16px; border-radius:8px; cursor:pointer; transition:0.2s; margin:5px 0;}
+button:hover { background:#0077aa; }
+table { border-collapse: collapse; width:100%; margin-top:10px;}
+th, td { border:1px solid #ccc; padding:6px; text-align:center;}
+th { background:#0099cc; color:white; }
+</style>
+</head>
+<body>
+<header>
+<h1>EMG + ROM Dashboard</h1>
+</header>
+<main>
+<div class="section">
+<h2>Upload Data</h2>
+<div class="controls">
+<div class="dropzone" id="emgDrop">Sample_EMG.txt</div>
+<button onclick="clearFile('emg')">Clear EMG</button>
+<div class="dropzone" id="romDrop">Sample_ROM.txt</div>
+<button onclick="clearFile('rom')">Clear ROM</button>
+<button onclick="generateGraph()">Generate Graph</button>
+</div>
+</div>
+<div class="section">
+<h2>Interactive Graph</h2>
+<div id="graph"></div>
+</div>
+<div class="section">
+<h2>Options</h2>
+<div class="controls">
+<div>
+<label>RMS Window (samples)</label>
+<input type="number" id="envWindow" value="50" min="1">
+</div>
+<div>
+<label>Burst Threshold Multiplier: <span id="threshVal">1.5</span></label>
+<input type="range" id="threshMult" value="1.5" min="0.1" max="5" step="0.1" oninput="document.getElementById('threshVal').innerText=this.value">
+</div>
+<div>
+<label>Toggles</label><br>
+<input type="checkbox" id="showEMG" class="toggle" checked> Show EMG<br>
+<input type="checkbox" id="showEnv" class="toggle" checked> Show RMS Envelope<br>
+<input type="checkbox" id="showBursts" class="toggle" checked> Show Bursts<br>
+<input type="checkbox" id="showROM" class="toggle" checked> Show ROM
+</div>
+<div>
+<button onclick="copyGraphData()">Copy Data to Clipboard</button>
+</div>
+</div>
+</div>
+<div class="section">
+<h2>Summary</h2>
+<div id="summary"></div>
+<button onclick="downloadCSV('summary')">Download Summary CSV</button>
+</div>
+<div class="section">
+<h2>Top 3 EMG Peaks</h2>
+<div id="peaks"></div>
+</div>
+<div class="section">
+<h2>Burst Information</h2>
+<div id="bursts"></div>
+<button onclick="downloadCSV('bursts')">Download Bursts CSV</button>
+</div>
+</main>
+<script>
+const fs = 50;
+let emgVals = [], romVals = [];
+let burstData = [], summaryData = [], burstRects = [];
+
+function preloadSamples(){
+    // Paste your EMG file contents as an array
+    emgVals = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,3,5,7,9,11,12,13,15,18,23,27,31,36,40,44,47,49,49,48,49,50,51,52,53,53,52,50,48,46,45,45,46,47,48,48,49,50,52,54,54,54,53,51,49,46,42,37,33,28,24,19,16,13,10,8,6,5,4,3,2,2,2,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1,1,1,1,1,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,2,2,2,2,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,2,3,4,5,5,5,5,5,6,7,9,11,12,13,14,15,18,21,26,32,38,44,49,53,55,55,54,51,48,46,45,44,42,41,40,39,38,37,36,34,33,32,32,33,33,32,31,29,27,25,22,19,16,14,12,10,8,7,6,5,4,3,3,2,2,2,3,3,3,2,2,2,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,2,2,2,2,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,2,2,4,6,8,11,14,17,20,24,27,29,31,33,36,39,42,45,47,47,47,47,47,47,47,46,46,46,45,45,44,42,40,38,37,37,40,44,48,50,51,50,48,46,44,42,42,43,46,50,53,56,59,60,60,58,56,54,51,47,42,38,33,29,25,22,19,17,15,13,12,12,11,10,9,8,6,5,4,4,3,2,2,2,2,2,2,3,3,3,2,2,2,2,2,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,1,1,2,3,4,4,4,5,7,9,11,13,15,16,17,18,20,22,24,28,31,35,38,42,44,44,45,47,51,54,55,54,51,47,43,40,38,36,34,32,30,29,28,26,24,21,19,17,15,13,11,9,8,7,6,5,5,4,4,3,3,3,2,2,2,1,1,1,1,2,2,2,2,2,3,3,3,2,2,2,2,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,2,2,3,3,3,3,3,3,3,3,4,5,6,8,9,10,11,13,14,14,16,18,20,23,26,30,33,36,40,44,47,50,54,56,56,56,56,56,57,58,59,60,62,64,64,64,62,59,56,52,48,43,37,32,27,22,18,15,12,9,7,6,4,3,2,2,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]; 
+
+    // Paste your ROM file contents as an array
+    romVals = [0,0,0,0,0,0,0,0,0,0,8,10,12,13,15,17,19,22,24,26,28,30,32,34,36,38,40,42,44,46,48,49,51,53,55,56,58,60,62,63,65,67,69,71,72,74,76,78,79,81,82,83,84,86,87,88,89,90,90,91,92,93,93,94,94,95,95,96,96,97,97,97,98,98,98,99,99,99,100,100,100,100,100,101,101,101,101,100,100,99,98,97,95,93,90,88,85,82,79,76,73,70,67,64,61,58,56,53,50,47,44,41,38,36,33,30,28,25,23,21,19,17,15,13,12,10,9,8,7,5,4,3,3,2,1,0,-1,-2,-2,-3,-4,-4,-4,-5,-5,-5,-5,-6,-6,-6,-6,-6,-6,-6,-6,-5,-5,-5,-5,-5,-5,-5,-4,-4,-3,-3,-2,-1,-1,0,1,2,4,5,6,8,9,11,13,14,16,18,20,21,23,25,27,29,31,34,36,38,40,43,45,48,50,53,55,58,60,63,65,68,70,73,75,77,79,81,83,85,86,88,89,90,92,93,94,95,95,96,97,97,98,98,99,99,99,100,100,100,101,101,101,101,101,101,102,102,102,102,102,101,101,99,98,96,94,91,88,85,81,78,74,71,67,64,61,58,55,53,50,48,46,43,41,39,37,36,34,32,30,28,27,25,24,22,20,19,18,16,15,14,13,12,11,10,9,9,8,7,7,6,5,5,4,4,3,3,2,2,1,1,0,0,-1,-1,-1,-1,-1,-2,-2,-2,-2,-2,-2,-2,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,0,0,0,0,0,1,1,2,3,4,5,6,8,9,11,14,16,19,21,24,27,30,32,35,38,41,44,46,49,52,54,57,59,62,64,66,68,70,72,74,76,78,80,81,83,84,85,86,87,89,89,90,91,92,93,93,94,95,95,96,96,96,97,97,97,98,98,98,98,98,98,98,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,98,98,97,96,94,92,90,88,85,82,79,76,74,71,68,66,63,60,58,56,53,51,49,47,45,43,41,40,38,37,35,33,32,30,29,27,25,24,22,21,20,18,17,16,15,14,13,12,12,11,10,10,9,9,8,8,7,7,7,6,6,5,5,5,4,4,4,4,4,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,4,4,5,6,7,8,9,11,12,13,14,16,17,19,20,22,23,25,27,29,30,32,34,36,38,40,42,44,45,47,49,51,53,55,56,58,60,62,64,65,67,69,71,72,74,76,78,79,81,83,84,85,86,88,89,89,90,91,92,92,93,93,94,94,95,95,95,95,96,96,96,96,96,96,96,96,96,96,96,96,95,95,94,93,92,90,89,87,85,83,81,79,77,75,73,71,69,67,64,62,60,58,56,53,51,49,47,45,42,40,38,36,34,31,29,27,25,24,22,20,19,17,15,14,13,11,10,8,7,5,4,3,2,0,-1,-1,-2,-3,-4,-4,-5,-5,-6,-6,-6,-6,-7,-7,-7,-7,-7,-7,-7,-7,-7,-7,-7,-7,-7,-7,-7,-6,-6,-6,-5,-5,-5,-4,-3,-2,-1,0,1,3,4,6,8,10,12,14,16,18,21,23,25,27,29,32,34,36,38,40,42,45,47,49,51,53,55,58,60,63,65,68,70,73,75,77,79,81,83,85,87,88,89,90,91,92,93,94,95,95,96,96,97,97,97,98,98,98,98,99,99,99,99,99,99,99,99,99,99,99,99,98,98,97,96,95,93,92,90,88,86,84,82,80,78,76,74,72,70,68,65,63,61,59,56,54,52,50,47,45,43,41,39,37,35,33,31,30,28,27,25,24,23,22,21,20,19,18,17,16,16,15,15,14,13,13,13,12,12,11,11,10,10,9,9,9,8,8,8,8,7,7,7,7,7,6,6,6,6,5,5,5,5,4,4,4,4,4,4,4,3,3,3,3,3,3,3,3,3,3,3,3,3,2,2,2,2,2,1,1,1,0,0,0,-1,-1,-1,-2,-2,-2,-3,-3,-3,-3,-4,-4,-4,-4,-4.]; 
+
+    document.getElementById('emgDrop').textContent="Sample_EMG.txt";
+    document.getElementById('romDrop').textContent="Sample_ROM.txt";
+    generateGraph();
+}
+
+
+function parseData(text){ return text.replace(/\n/g,',').replace(/\s/g,',').split(',').map(x=>parseFloat(x)).filter(x=>!isNaN(x)); }
+function calcRMS(values,window){ return values.map((v,i)=>{ const start=Math.max(0,i-window+1); const sumSq=values.slice(start,i+1).reduce((a,b)=>a+b**2,0); return Math.sqrt(sumSq/(i-start+1)); }); }
+function detectBursts(rms,mult){
+    const mean=rms.reduce((a,b)=>a+b,0)/rms.length;
+    const std=Math.sqrt(rms.reduce((a,b)=>a+(b-mean)**2,0)/rms.length);
+    const thresh=mean+mult*std;
+    const bursts=[]; let inBurst=false,start=0;
+    rms.forEach((v,i)=>{ if(v>thresh && !inBurst){start=i; inBurst=true;} else if(v<=thresh && inBurst){bursts.push([start,i-1]); inBurst=false;} });
+    if(inBurst) bursts.push([start,rms.length-1]);
+    return {bursts,thresh};
+}
+function topPeaks(values,n=3){ return [...values].map((v,i)=>({val:v,idx:i})).sort((a,b)=>b.val-a.val).slice(0,n); }
+function setupDropzone(id,callback){
+    const dz = document.getElementById(id);
+    dz.addEventListener('click', ()=>{
+        const input=document.createElement('input');
+        input.type='file'; input.accept='.txt';
+        input.onchange=e=>callback(e.target.files[0]);
+        input.click();
+    });
+    dz.addEventListener('dragover', e=>{ e.preventDefault(); dz.classList.add('hover'); });
+    dz.addEventListener('dragleave', e=>{ dz.classList.remove('hover'); });
+    dz.addEventListener('drop', e=>{
+        e.preventDefault(); dz.classList.remove('hover');
+        if(e.dataTransfer.files.length>0) callback(e.dataTransfer.files[0]);
+    });
+}
+setupDropzone('emgDrop', file=>{
+    const reader=new FileReader();
+    reader.onload=e=>{ emgVals=parseData(e.target.result); document.getElementById('emgDrop').textContent=file.name; };
+    reader.readAsText(file);
+});
+setupDropzone('romDrop', file=>{
+    const reader=new FileReader();
+    reader.onload=e=>{ romVals=parseData(e.target.result); document.getElementById('romDrop').textContent=file.name; };
+    reader.readAsText(file);
+});
+function clearFile(type){ if(type==='emg'){ emgVals=[]; document.getElementById('emgDrop').textContent='Drag & Drop EMG File or Click'; } if(type==='rom'){ romVals=[]; document.getElementById('romDrop').textContent='Drag & Drop ROM File or Click'; } }
+function downloadCSV(type){
+    let rows=[];
+    if(type==='summary') rows=summaryData;
+    if(type==='bursts') rows=burstData;
+    let csv=rows.map(r=>Object.values(r).join(",")).join("\n");
+    let blob=new Blob([csv],{type:"text/csv"});
+    let a=document.createElement("a");
+    a.href=URL.createObjectURL(blob);
+    a.download=type+".csv"; a.click();
+}
+function copyGraphData(){
+    let n=Math.max(emgVals.length,romVals.length);
+    let time=Array.from({length:n},(_,i)=>i/fs);
+    let csv="Time,EMG,ROM\n";
+    for(let i=0;i<n;i++){ csv+=`${time[i]},${emgVals[i]||""},${romVals[i]||""}\n`; }
+    navigator.clipboard.writeText(csv).then(()=>alert("Graph data copied. Paste into Excel."));
+}
+function generateGraph(){
+    const envWindow=parseInt(document.getElementById('envWindow').value);
+    const threshMult=parseFloat(document.getElementById('threshMult').value);
+    const showEMG=document.getElementById('showEMG').checked;
+    const showEnv=document.getElementById('showEnv').checked;
+    const showBursts=document.getElementById('showBursts').checked;
+    const showROM=document.getElementById('showROM').checked;
+    const n=Math.max(emgVals.length,romVals.length);
+    const time=Array.from({length=n},(_,i)=>i/fs);
+    const traces=[]; summaryData=[]; burstData=[]; burstRects=[];
+    if(emgVals.length>0 && showEMG){
+        traces.push({x:time.slice(0,emgVals.length), y:emgVals, mode:'lines', name:'EMG', line:{color:'blue'}});
+        const rmsEnv=calcRMS(emgVals,envWindow);
+        let bursts=[],thresh=0;
+        if(showEnv){
+            traces.push({x:time.slice(0,rmsEnv.length), y:rmsEnv, mode:'lines', name:'RMS Envelope', line:{color:'orange'}});
+            const res=detectBursts(rmsEnv,threshMult); bursts=res.bursts; thresh=res.thresh;
+            if(showBursts){
+                traces.push({x:[time[0],time[emgVals.length-1]], y:[thresh,thresh], mode:'lines', name:'Threshold', line:{color:'red', dash:'dash'}});
+                bursts.forEach((b,i)=>{
+                    burstRects.push({type:"rect", x0:time[b[0]], x1:time[b[1]], y0:0, y1:1, xref:"x", yref:"paper", fillcolor:"red", opacity:0.2, line:{width:0}});
+                    burstData.push({Start_s:(b[0]/fs).toFixed(2), End_s:(b[1]/fs).toFixed(2), Duration_s:((b[1]-b[0])/fs).toFixed(2)});
+                });
+            }
+        }
+        const emgMin=Math.min(...emgVals), emgMax=Math.max(...emgVals), emgMean=emgVals.reduce((a,b)=>a+b,0)/emgVals.length, emgMedian=[...emgVals].sort((a,b)=>a-b)[Math.floor(emgVals.length/2)], emgStd=Math.sqrt(emgVals.reduce((a,b)=>a+(b-emgMean)**2,0)/emgVals.length), emgRMS=Math.sqrt(emgVals.reduce((a,b)=>a+b*b,0)/emgVals.length);
+        summaryData.push({Metric:"EMG Min",Value:emgMin.toFixed(2)});
+        summaryData.push({Metric:"EMG Max (Abs Peak)",Value:emgMax.toFixed(2)});
+        summaryData.push({Metric:"EMG Mean",Value:emgMean.toFixed(2)});
+        summaryData.push({Metric:"EMG Median",Value:emgMedian.toFixed(2)});
+        summaryData.push({Metric:"EMG Std",Value:emgStd.toFixed(2)});
+        summaryData.push({Metric:"EMG RMS",Value:emgRMS.toFixed(2)});
+        summaryData.push({Metric:"Bursts Detected",Value:bursts.length});
+        const peaks=topPeaks(emgVals,3);
+        let peakTable="<table><tr><th>#</th><th>Value</th><th>Time (s)</th></tr>";
+        peaks.forEach((p,i)=>{ peakTable+=`<tr><td>${i+1}</td><td>${p.val.toFixed(2)}</td><td>${(p.idx/fs).toFixed(2)}</td></tr>`; traces.push({x:[time[p.idx]], y:[p.val], mode:'markers+text', text:['P'+(i+1)], textposition:'top center', marker:{color:'green', size:10}}); });
+        peakTable+="</table>";
+        document.getElementById('peaks').innerHTML=peakTable;
+    }
+    if(romVals.length>0 && showROM){
+        traces.push({x:time.slice(0,romVals.length), y:romVals, mode:'lines', name:'ROM', line:{color:'purple'}, yaxis:"y2"});
+        const romMin=Math.min(...romVals), romMax=Math.max(...romVals), romMean=romVals.reduce((a,b)=>a+b,0)/romVals.length, romMedian=[...romVals].sort((a,b)=>a-b)[Math.floor(romVals.length/2)], romStd=Math.sqrt(romVals.reduce((a,b)=>a+(b-romMean)**2,0)/romVals.length);
+        summaryData.push({Metric:"ROM Min",Value:romMin.toFixed(2)});
+        summaryData.push({Metric:"ROM Max",Value:romMax.toFixed(2)});
+        summaryData.push({Metric:"ROM Mean",Value:romMean.toFixed(2)});
+        summaryData.push({Metric:"ROM Median",Value:romMedian.toFixed(2)});
+        summaryData.push({Metric:"ROM Std",Value:romStd.toFixed(2)});
+    }
+    let summaryTable="<table><tr><th>Metric</th><th>Value</th></tr>";
+    summaryData.forEach(r=>summaryTable+=`<tr><td>${r.Metric}</td><td>${r.Value}</td></tr>`);
+    summaryTable+="</table>";
+    document.getElementById('summary').innerHTML=summaryTable;
+    if(burstData.length>0){
+        let burstTable="<table><tr><th>#</th><th>Start (s)</th><th>End (s)</th><th>Duration (s)</th></tr>";
+        burstData.forEach((b,i)=>{ burstTable+=`<tr><td>${i+1}</td><td>${b.Start_s}</td><td>${b.End_s}</td><td>${b.Duration_s}</td></tr>`; });
+        burstTable+="</table>";
+        document.getElementById('bursts').innerHTML=burstTable;
+    } else {
+        document.getElementById('bursts').innerHTML="<i>No bursts detected or envelope disabled</i>";
+    }
+    const layout={
+        title:'EMG + ROM Dashboard',
+        xaxis:{title:'Time (s)'},
+        yaxis:{title:'EMG'},
+        hovermode:'x unified',
+        shapes:burstRects
+    };
+    if(showROM && romVals.length>0) layout.yaxis2={title:'ROM', overlaying:'y', side:'right'};
+    Plotly.newPlot('graph',traces,layout,{responsive:true,displaylogo:false,modeBarButtonsToAdd:["toImage"]});
+}
+window.onload=preloadSamples;
+</script>
+</body>
+</html>
